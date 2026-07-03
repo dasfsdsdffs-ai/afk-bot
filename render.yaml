@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: fronipe-afk-bot
+    env: node
+    buildCommand: npm install
+    startCommand: node index.js
+    plan: free
