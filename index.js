@@ -17,6 +17,7 @@ var port = data["port"] || 25565;
 var username = data["name"];
 var reconnecting = false;
 var spawnTime = null;
+var playerCommand = null;
 
 const HOSTILE_MOBS = new Set([
   'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'enderman',
@@ -221,40 +222,47 @@ function startGameLoop(bot) {
             }
           }
 
-          // bot.players ile TÜM sunucudaki oyuncuları al (uzaktakiler dahil)
-          const allPlayers = Object.values(bot.players).filter(p =>
-            p.username !== username && p.entity
-          );
-
-          // En yakın oyuncuyu bul (entity varsa)
-          const nearestPlayer = allPlayers.sort((a, b) =>
-            bot.entity.position.distanceTo(a.entity.position) -
-            bot.entity.position.distanceTo(b.entity.position)
-          )[0];
-
-          if (nearestPlayer && nearestPlayer.entity) {
-            const dist = bot.entity.position.distanceTo(nearestPlayer.entity.position);
-
-            // Yeni bir oyuncuya yaklaştıysa merhaba de (10 dk cooldown)
-            const now = Date.now();
-            if (
-              dist < 8 &&
-              nearestPlayer.username !== lastGreetedPlayer &&
-              now - lastGreetTime > 10 * 60 * 1000
-            ) {
-              lastGreetedPlayer = nearestPlayer.username;
-              lastGreetTime = now;
-              const greet = greetMessages[Math.floor(Math.random() * greetMessages.length)];
-              bot.chat(greet);
+          // Oyuncu komutu varsa ona göre davran
+          if (playerCommand && playerCommand.type === 'stay') {
+            // Bekle — hiçbir şey yapma
+          } else if (playerCommand && playerCommand.type === 'follow') {
+            const cmdTarget = bot.players[playerCommand.player];
+            if (cmdTarget && cmdTarget.entity) {
+              bot.pathfinder.setGoal(new GoalFollow(cmdTarget.entity, 2), true);
             }
-
-            // Entity'yi doğrudan takip et — mesafe ne kadar olursa olsun
-            bot.pathfinder.setGoal(new GoalFollow(nearestPlayer.entity, 2), true);
-            followingPlayer = nearestPlayer.username;
           } else {
-            followingPlayer = null;
-            bot.pathfinder.setGoal(null);
-            await mineNearbyLog(bot);
+            // Otomatik mod: en yakın oyuncuyu takip et
+            const allPlayers = Object.values(bot.players).filter(p =>
+              p.username !== username && p.entity
+            );
+
+            const nearestPlayer = allPlayers.sort((a, b) =>
+              bot.entity.position.distanceTo(a.entity.position) -
+              bot.entity.position.distanceTo(b.entity.position)
+            )[0];
+
+            if (nearestPlayer && nearestPlayer.entity) {
+              const dist = bot.entity.position.distanceTo(nearestPlayer.entity.position);
+
+              const now = Date.now();
+              if (
+                dist < 8 &&
+                nearestPlayer.username !== lastGreetedPlayer &&
+                now - lastGreetTime > 10 * 60 * 1000
+              ) {
+                lastGreetedPlayer = nearestPlayer.username;
+                lastGreetTime = now;
+                const greet = greetMessages[Math.floor(Math.random() * greetMessages.length)];
+                bot.chat(greet);
+              }
+
+              bot.pathfinder.setGoal(new GoalFollow(nearestPlayer.entity, 2), true);
+              followingPlayer = nearestPlayer.username;
+            } else {
+              followingPlayer = null;
+              bot.pathfinder.setGoal(null);
+              await mineNearbyLog(bot);
+            }
           }
         }
       } catch(e) {}
@@ -315,13 +323,55 @@ function createBot() {
     bot.chat('Öldüm... ama geri döneceğim!');
   });
 
-  bot.on('chat', function(sender, message) {
+  bot.on('chat', async function(sender, message) {
     if (sender === username) return;
-    if (message === '!status') {
+    const msg = message.trim().toLowerCase();
+
+    if (msg === '!status') {
       const uptime = spawnTime ? Math.floor((Date.now() - spawnTime) / 1000) : 0;
       const mins = Math.floor(uptime / 60);
       const secs = uptime % 60;
       bot.chat('FronipeBOT aktif! Can: ' + Math.floor(bot.health || 0) + '/20 | Açlık: ' + Math.floor(bot.food || 0) + '/20 | Süre: ' + mins + 'dk ' + secs + 'sn');
+
+    } else if (msg === '!gel' || msg === '!follow') {
+      const target = bot.players[sender];
+      if (target && target.entity) {
+        playerCommand = { type: 'follow', player: sender };
+        bot.pathfinder.setGoal(new GoalFollow(target.entity, 2), true);
+        bot.chat(sender + ' tamam, yanına geliyorum!');
+      } else {
+        bot.chat(sender + ' seni bulamıyorum, yakınımda ol!');
+      }
+
+    } else if (msg === '!dur' || msg === '!stop') {
+      playerCommand = null;
+      bot.pathfinder.setGoal(null);
+      bot.chat(sender + ' tamam, durdum!');
+
+    } else if (msg === '!odun' || msg === '!wood') {
+      playerCommand = { type: 'wood', player: sender };
+      bot.chat(sender + ' odun kesmeye gidiyorum, bekle!');
+      let count = 0;
+      for (let i = 0; i < 5; i++) {
+        const cut = await mineNearbyLog(bot);
+        if (cut) count++;
+        await sleep(500);
+      }
+      const target2 = bot.players[sender];
+      if (target2 && target2.entity) {
+        bot.pathfinder.setGoal(new GoalFollow(target2.entity, 2), true);
+      }
+      bot.chat(sender + ' ' + count + ' odun kestim, al bunları!');
+      playerCommand = null;
+
+    } else if (msg === '!bekle' || msg === '!stay') {
+      playerCommand = { type: 'stay' };
+      bot.pathfinder.setGoal(null);
+      bot.pvp.stop();
+      bot.chat(sender + ' tamam, burada bekliyorum!');
+
+    } else if (msg === '!yardim' || msg === '!help' || msg === '!komutlar') {
+      bot.chat('Komutlar: !gel !dur !bekle !odun !status');
     }
   });
 
